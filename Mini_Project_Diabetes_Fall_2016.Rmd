@@ -477,8 +477,3 @@ mean(data_test$readmitted != fit.tree.pred.y)
 
 ```
 
-## Forward selection method
-
-```{r}
-mydata$out <- relevel()
-```
