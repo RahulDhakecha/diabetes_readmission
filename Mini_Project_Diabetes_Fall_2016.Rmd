@@ -29,622 +29,456 @@ knitr::opts_chunk$set(tidy=TRUE, fig.width=6,  fig.height=5,
                       fig.align='left', dev = 'pdf')
 ```
 
-\vspace{.3in}
 
-# Instructions
 
-* This project is due at **11:59pm on Monday, Nov. 13, 2016.**
-* It is an individual project, amounting to 25% of your final grade. Note the *Collaboration* section at the bottom of this document.
-* There is no single correct answer. You will be graded on the general quality of your work. 
-* The entire write up should not be more than 15 pages. You may put any supporting documents, code, graphics, or other exhibits into an Appendix, which is not counted in the 15 page limit.
+### Packages
+```{r}
+# install.packages("ggplot2")
+# install.packages("MASS")     # Many packages available. We only need a few.
+library(MASS)  # load package MASS
+library(lattice) # xyplot(), bwplot()
+library(ggplot2)
+library(ISLR)   # load data from ISLR
+library(leaps)  # regsubsets()
+library(car)
+library(tree)
+library(randomForest)
+library(clusterGeneration)    # for plotting correlation
+library(mnormt)      # for plotting correlation
+library(corrplot)    # for ploting correlation
+library(polycor)    # for correlation of categorical variables
+library(glmnet)
+library(stats)
+library(SparseM)
+```
+
+
+### Analyzing Data in Raw form given in diabetic.data.csv and from website
+
+```{r}
+data_all <- read.csv("D:/courses_fall_2016/data mining stat571/mini project/diabetic.data.csv", header = TRUE)
+str(data_all)
+names(data_all)
+#is.na(data_all)
+```
+
+### Analyzing data in filtered form given in readmission.csv
+
+```{r}
+data <- read.csv("D:/courses_fall_2016/data mining stat571/mini project/readmission.csv", header = TRUE)
+
+str(data)
+names(data)
+sum(is.na(data))
+sum(as.numeric(which(as.numeric(data$max_glu_serum)=="3")))
+#we plot few variables against readmission indicator. Few variables like glucose serum test and A1c #test quantitatively gives patients seriousness for diabetes
+# plot(data$max_glu_serum, data$A1Cresult,
+#        pch  = 16,
+#        cex  = 1.2,
+#        col  = "blue",
+#        xlab = "Glucose serum test",
+#        ylab = "Readmission indicator",
+#        main = "Readmission indicator vs Glucose serum test")
+#Analyze readmission vs clinical test results
+hist(as.numeric(data$readmitted), breaks=10, col="blue")
+ggplot(data, aes(as.numeric(data$A1Cresult),fill=as.numeric(data$readmitted))) +
+geom_histogram(bins = 60) +
+xlab("Age (s)") + ylab("Count") +
+ggtitle("Distribution of Age")
+#Analyze readmission vs Race
+hist(as.numeric(data$race), breaks=10, col="blue")
+ggplot(data, aes(as.numeric(data$readmitted),fill=(data$race))) +
+geom_histogram(bins = 60) +
+xlab("Readmission") + ylab("Count") +
+ggtitle("Distribution of Race in readmission")
+# Analysis of readmission vs Gender
+ggplot(data, aes(as.numeric(data$readmitted),fill=(data$gender))) +
+geom_histogram(bins = 60) +
+xlab("Readmission") + ylab("Count") +
+ggtitle("Distribution of Gender in readmission")
+#Conclusion: Almost equal males and females for readmission
+#Analyze relation between readmission vs time spend in hospital
+plot(data$time_in_hospital,jitter(as.numeric(data$readmitted)),pch=4)
+#Conclusion-cant comment anything from result
+
+# we cannot analyze each and every factor this way, therefore we analyze the ones which #we feel are more intuitive and then move on with building our model
+
+# person's medical history can be a key indicator of present analysis.
+# Therefore we try to relate those quantitities
+
+# Analyze readmission vs number_inpatient
+hist(as.numeric(data$number_inpatient), breaks=10, col="blue")
+ggplot(data, aes(as.numeric(data$readmitted),fill=as.factor(data$number_inpatient))) +
+geom_histogram(bins = 60) +
+xlab("Readmission") + ylab("Count") +
+ggtitle("Distribution of number_inpatient in readmission")
+#Conclusion: No clear trend
+
+# Analyze readmission vs number_outpatient
+hist(as.numeric(data$number_outpatient), breaks=10, col="blue")
+ggplot(data, aes(as.numeric(data$readmitted),fill=as.factor(data$number_outpatient))) +
+geom_histogram(bins = 60) +
+xlab("Readmission") + ylab("Count") +
+ggtitle("Distribution of number_outpatient in readmission")
+#Conclusion: No clear trend
+
+# Analyze readmission vs number_emergency
+hist(as.numeric(data$number_emergency), breaks=100, col="blue")
+ggplot(data, aes(as.numeric(data$number_emergency),fill=as.factor(data$readmitted))) +
+geom_histogram(bins = 60) +
+xlab("Readmission") + ylab("Count") +
+ggtitle("Distribution of number_emergency in readmission")
+#Conclusion: No clear trend
+
 
-# Introduction
+```
 
-## Background
+We analyze two clinical results and we find that both of them have major proportion of "None" values and therefore they are inapt to provide any substantial information for our case.
 
-Diabetes is a chronic medical condition affecting millions of Americans, but if managed well, with good diet, exercise and medication, patients can lead relatively normal lives. However, if improperly managed, diabetes can lead to patients being continuously admitted and readmitted to hospitals. Readmissions are especially serious - they represent a failure of the health system to provide adequate support to the patient and are extremely costly to the system. As a result, the Centers for Medicare and Medicaid Services announced in 2012 that they would no longer reimburse hospitals for services rendered if a patient was readmitted with complications within 30 days of discharge.
 
-Given these policy changes, being able to identify and predict those patients most at risk for costly readmissions has become a pressing priority for hospital administrators. 
 
-In this project, we shall explore how to use the techniques we have learned in order to help better manage diabetes patients who have been admitted to a hospital. Our goal is to avoid patients being readmitted within 30 days of discharge, which reduces costs for the hospital and improves outcomes for patients..
+### Model Selection
+Many ways to select model:
+1. Forward selection
+2. Backward selection
+3. Regsubset(Exhaustive)
+4. LASSO/Elastic net
+5. Random Forests
+```{r}
+#First we split that data into training and testing set. And we will not touch the #testing set except for the crossvalidation part
+data_train <- data
+# name.num <- sapply(data_train, is.numeric) # pulling out all the num. var's.
+# pairs(data_train[name.num]) # pariwise scatter plots for num var's
+# #above command will allow us to identify the correlation between any two numeric #variables
+# cor(data.comp[name.num])
+# pairs(data.comp[c("Salary","CHmRun", "Hits")], pch=16) #this command can be used to zoom in scatter plots for particular variables
 
-The original data is from the [Center for Clinical and Translational Research](https://archive.ics.uci.edu/ml/datasets/Diabetes+130-US+hospitals+for+years+1999-2008) at Virginia Commonwealth University. It covers data on diabetes patients across 130 U.S. hospitals from 1999 to 2008. There are over 100,000 unique hospital admissions in this dataset, from ~70,000 unique patients. The data includes demographic elements, such as age, gender, and race, as well as clinical attributes such as tests conducted, emergency/inpatient visits, etc. Refer to the original documentation for more details on the dataset. Three former students Spencer Luster, Matthew Lesser and Mridul Ganesh, brought this data set into the class and did a wonderful final project. We will use a subset processed by the group but with a somewhat different end goal.
 
-## Goals of the analysis
+#########VERY IMPORTANT: Is any transformation required on any of the variable?/######
+##Find answer to the above question
 
-1. Identify which patients have the highest tendency to be readmitted within 30 days. 
-2. What are the most important factors which determine whether or not the patient will be readmitted within this period? 
-3. Propose a classification rule to predict if a patient will be readmitted within 30 days. 
+## RSS solely cannot be used as a criteria to build our model. Presently we have 30 predictors + one output. If we use RSS as our criteria to build model, then we will build a model with 30 predictors as shown below
 
-### Characteristics of the Data Set
+data_in_train <- data_train[, -31]   #variable "readmitted" removed from the predictor set
+data_out_train <- data_train[,31]  #output variable
 
-All observations have five things in common:
+model_all_var <- lm(as.numeric(readmitted) ~ .,data=data_train)
+summary(model_all_var)
 
-1.	They are all hospital admissions
-2.	Each patient had some form of diabetes
-3.	The patient stayed for between 1 and 14 days.
-4.	The patient had laboratory tests performed on him/her.
-5.	The patient was given some form of medication during the visit.
+## From the above summary, comment on some important predictors.
+## Simply removing higher p-value variables does not give us correcct accurate model.
 
-The data was collected during a ten-year period from 1999 to 2008. There are over 100,000 unique hospital admissions in the data set, with ~70,000 unique patients. 
+##Before going into model building, we need to efficiently deal with categorical variables. Work on this later.
 
-### Description of variables
 
-The dataset used covers ~50 different variables to describe every hospital diabetes admission. In this section we give an overview and brief description of the variables in this dataset.
+#We will use following three parameters to judge the efficiency of model:
+#1. Cp- indirect measurement of mean prediction error
+#2. AIC- notion of likelihood function
+#3. BIC- derived from Bayesian route, this criteria helps in selecting smaller models
 
-**a) Patient identifiers:** 
+############REGSUBSETS###########
 
-a. `encounter_id` is a unique identifier for each admission, and 
-b. `patient_nbr` uniquely identifies each patient 
+### Exhaustive search- this method will give best model(one with least RSS) for particular number of predictors
 
-**b) Patient Demographics:** 
+#fit.exh <- regsubsets(as.numeric(readmitted) ~., data=data_train, nvmax=31, method="exhaustive")
+# we see that exhaustive search method is extremely slow and it does throw and error
+# therefore we search for best model using forward and backward selection method
 
-`race`, `age`, `gender`, `weight` cover the basic demographic information associated with each patient. `Payer_code` is an additional variable that identifies which health insurance (Medicare /Medicaid / Commercial) the patient holds.
+### Forward selection
+set.seed(123)
+fit.forward <- regsubsets(as.numeric(readmitted) ~., data=data_train, nvmax=100, method="forward")
+fit.forward
+f.f <- summary(fit.forward)
+f.f
 
-**c) Admission and discharge details:** 
+# we use Cp, BIC and adjRsq criteria to find the optimum number of predictors
 
-a.	`admission_source_id` and `admission_type_id` identify who referred the patient to the hospital (e.g. physician vs. emergency dept.) and what type of admission this was (Emergency vs. Elective vs. Urgent). 
-b.	`discharge_disposition_id` indicates where the patient was discharged to after treatment.
+f.f$which
+f.f$rsq
+f.f$rss
+f.f$bic
 
-**d) Patient Medical History:**
 
-a.	`num_outpatient`: number of outpatient visits by the patient in the year prior to the current encounter
-b.	`num_inpatient`: number of inpatient visits by the patient in the year prior to the current encounter
-c.	`num_emergency`: number of emergency visits by the patient in the year prior to the current encounter
 
-**e)	Patient admission details:**
+par(mfrow=c(3,1))
+plot(f.f$adjr2 ,xlab =" Number of Variables ",
+     ylab=" Adjusted RSq")
+points(which.max(f.f$adjr2), f.f$adjr2[which.max(f.f$adjr2)], col ="red",cex =2, pch =20)
 
-a.	`medical_specialty`: the specialty of the physician admitting the patient
-b.	`diag_1`, `diag_2`, `diag_3`: ICD9 codes for the primary, secondary and tertiary diagnoses of the patient.  ICD9 are the universal codes that all physicians use to record diagnoses. There are various easy to use tools to lookup what individual codes mean (Wikipedia is pretty decent on its own)
-c.	`time_in_hospital`: the patient’s length of stay in the hospital (in days)
-d.	`number_diagnoses`: Total no. of diagnosis entered for the patient
-e.	`num_lab_procedures`: No. of lab procedures performed in the current encounter
-f.	`num_procedures`: No. of non-lab procedures performed in the current encounter
-g.	`num_medications`: No. of distinct medications prescribed in the current encounter
+plot(f.f$cp ,xlab =" Number of Variables ",ylab="Cp")
+points (which.min(f.f$cp), f.f$cp[which.min(f.f$cp)], col ="red",cex =2, pch =20)
 
-**f)	Clinical Results:**
+plot(f.f$bic ,xlab=" Number of Variables ",ylab=" BIC")
+points (which.min(f.f$bic), f.f$bic[which.min(f.f$bic)], col =" red",cex =2, pch =20)
+par(mfrow=c(1,1))
 
-a.	`max_glu_serum`: indicates results of the glucose serum test
-b.	`A1Cresult`: indicates results of the A1c test
+##we get optimum number of predictors=43; using min BIC value
 
-**g)	Medication Details:**
+opt.size <- which.min(f.f$bic) # locate the optimal model size
+opt.size
+fit.exh.var <- f.f$which
+fit.exh.var[opt.size,]  # this gives us the optimal variables selected
 
-a.	`diabetesMed`: indicates if any diabetes medication was prescribed 
-b.	`change`: indicates if there was a change in diabetes medication
-c.	`24 medication variables`: indicate whether the dosage of the medicines was changed in any manner during the encounter
+```
 
-**h)	Readmission indicator:** 
+### Model selection using forward selection and for loop
 
-Indicates whether a patient was readmitted after a particular admission. There are 3 levels for this variable: "NO" = no readmission, "< 30" = readmission within 30 days and "> 30" = readmission after more than 30 days. The 30 day distinction is of practical importance to hospitals because federal regulations penalize hospitals for an excessive proportion of such readmissions.
+We see that due to presence of too many categorical variables, we cannot select the model directly using regsubset function. We use for loop to find our model.
 
-To save your time we are going to use some data sets cleaned by the group. Thus, we provide two datasets:
+```{r}
+# temp_mod=0
+# aic_val=0
+# for (i in 1:30){
+#   temp_mod <- lm(as.numeric(readmitted) ~ data_train[,i], data=data_train)
+#   aic_val[i]=AIC(temp_mod)
+# }
+# lm_input=0
+# for (i in 1:10){
+#   which.min(aic_val)
+#   lm_input <- cbind(lm_input,data_train[,which.min(aic_val)])
+#   aic_val[which.min(aic_val)] <- 0
+# }
+```
 
-**`diabetic.data.csv`** is the original data. You may use it for the purpose of summary if you wish. You will see that the original data can’t be used directly for your analysis, yet. 
+## Data Analysis
 
-**`readmission.csv`** is a cleaned version and they are modified in the following ways:
+Complete data set given to us in file "diabetic.data.csv" has many redundant variables. Therefore we work with filtered dataset provided in file "readmission.csv" which contains only 31 variables. It has almost around 100000 data samples of different patients. We cannot work this large dataset because of the computational limit. The maximum number of trees formed in random forest is directly limited by the samples we take in training our model. More the samples, less number of trees can be formed owing to computational limit.
 
-1) `Payer code`, `weight` and `Medical Specialty` are not included since they have a large number of missing values. 
 
-2) Variables such as `acetohexamide`, `glimepiride.pioglitazone`, `metformin.rosiglitazone`, `metformin.pioglitazone` have little variability, and are as such excluded. This also includes the following variables: `chlorpropamide`, `acetohexamide`, `tolbutamide`, `acarbose`, `miglitor`, `troglitazone`, `tolazamide`, `examide`, `citoglipton`, `glyburide.metformin`, `glipizide.metformin`, and `glimepiride.pioglitazone`.
+```{r}
+set.seed(1)
+data_t <- data[sample(nrow(data), 50000, replace=FALSE), ]
+n=nrow(data)
+test.index=sample(n, 40000)
+length(test.index)
+data_test=data[test.index,]
+data_train=data[-test.index,]
 
-3) Some categorical variables have been regrouped. For example, `Diag1_mod` keeps some original levels with large number of patients and aggregates other patients as `others`. This process is known as 'binning.'
-		
-4) The event of interest is **readmitted within < 30 days**. Note that you need to create this response first by regrouping **Readmission indicator**!
 
-# Research questions
+## Cool plot for showing correlation between different predictors
+M <- cor(data_train[sapply(data_train, is.numeric)])
+corrplot(M, method="circle")
+plot(data_train$gender,data_train$time_in_hospital)
+# compared to male, female spends more time in hospital
+plot(data_train$readmitted,data_train$time_in_hospital)
+# on average, readmitted people tend to spend more time in hospital compared to other
+# categories
 
-Your study should answer the following questions:
 
-1) Identify important factors that capture the chance of a readmission within 30 days. 
 
-The set of available predictors is not limited to the raw variables in the data set. You may engineer any factors using the data, that you think will improve your model's quality.
+##############################################################################
+#to exploit the relation between two categorical variables, we create two way tables for
+#various variables.
 
-2) For the purpose of classification, propose a model that can be used to predict whether a patient will be a readmit within 30 days. Justify your choice. Hint: use a decision criterion, such as AUC, to choose among a few candidate models.
+## 1. readmitted vs gender
 
-Based on a quick and somewhat arbitrary guess, we estimate it costs twice as much to mislabel a readmission than it does to mislabel a non-readmission. Based on this risk ratio, propose a specific classification rule to minimize the cost. If you find any information that could provide a better cost estimate, please justify it in your write-up and use the better estimate in your answer.
+with(data_train, table(readmitted, gender))
 
-Suggestion: You may use any of the methods learnt so far in parts 1) and 2), and they need not be the same. Also keep in mind that a training/testing data split may be necessary. 
+#from the table we see that, proportion of males and females being readmitted are almost same and thus gender does not give us any significant information
 
-# Suggested outline
+## 2. readmitted vs race
 
-As you all know, it is very important to present your study well. To achieve the best possible results you need to understand your audience. 
+with(data_train, table(readmitted, race))
+#from the table we see that race is one of the important factor. AfricanAmerican, Caucasian, Hispanic have higher proportion of readmissions.
 
-Your target audience is a manager within the hospital organization. They hold an MBA, are familiar with medical terminology (though you do not need any previous medical knowledge), and have gone through a similar course to our Modern Data Mining with someone like your professor. You can assume thus some level of technical familiarity, but should not let the paper be bogged down with code or other difficult to understand output.
+##3. readmitted vs max_glu_serum
 
-Note then that the most important elements of your report are the clarity of your analysis and the quality of your proposals. 
+with(data_train, prop.table(table(readmitted, max_glu_serum),2))
+with(data_train, addmargins(prop.table(table(readmitted, max_glu_serum),2)))
 
-A suggested outline of the report would include the following components: 
+#glucose serum test gives us the sugar level of patient. This is one of the predictor which directly correlates with the severeness of disease. It can be seen from proportion table, that case with >200 and >300 serum levels have high probability of readmission compared to other cases.
 
-1) Introduction and findings
+##4. readmitted vs A1Cresult
+with(data_train, addmargins(prop.table(table(readmitted, A1Cresult),2)))
+# A1Ctest gives us the average glucose level in a person's body for past 3 months. Clearly this test would be a significant factor in determining readmission rate. But the results from conditional probability tables are counter intuitive. WHY?
 
-This section should be accessible by people with very little statistical background. Try to avoid using technical words. No direct R output is allowed. You may find it useful to include an "executive summary" here.
-
-* Give a background of the study. You may check the original website or other sources to fill in some details, such as to why the questions we address here are important. 
-* A quick summary about the data.
-* Methods used and the main findings.
-* You may use clearly labelled and explained visualizations.
-* Issues, concerns, limitations of the conclusions. This is an especially important section to be honest in - we might be Wharton students, but we are statisticians today.
-
-2) Detailed process of the analysis
-
-i) Summarize the data
-
-* Nature of the data
-* Necessary quantitative and graphical summaries
-* Are there any problems with the data?
-* Which variables are considered as input 
-	
-ii) Analyses
-
-* Various appropriate statistical methods: e.g. glmnet, Random Forest
-* Comparisons of the methods
-* Final model(s)
-
-iii) Conclusion
-
-* Summarize results and the final model
-* Final recommendations
-
-Maintain a good descriptive flow in the text of your report. Use Appendices to display lengthy outputs etc. 
-
-iii) Appendix
-	
-* All your R code (code without comments is no good!) if you are not using `rmd` format.
-* Any things necessary to keep but for which you don't want them to be in the main report.
-* Useful graphics or similar.
-
-# Collaboration
-
-This is an **individual** assignment. We will only allow private Piazza posts for questions. If there are questions that are generally useful, we will release that information.
-
-<!-- ### Packages -->
-<!-- ```{r} -->
-<!-- # install.packages("ggplot2") -->
-<!-- # install.packages("MASS")     # Many packages available. We only need a few. -->
-<!-- library(MASS)  # load package MASS -->
-<!-- library(lattice) # xyplot(), bwplot() -->
-<!-- library(ggplot2) -->
-<!-- library(ISLR)   # load data from ISLR -->
-<!-- library(leaps)  # regsubsets() -->
-<!-- library(car) -->
-<!-- library(tree) -->
-<!-- library(randomForest) -->
-<!-- library(clusterGeneration)    # for plotting correlation -->
-<!-- library(mnormt)      # for plotting correlation -->
-<!-- library(corrplot)    # for ploting correlation -->
-<!-- library(polycor)    # for correlation of categorical variables -->
-<!-- library(glmnet) -->
-<!-- library(stats) -->
-<!-- library(SparseM) -->
-<!-- ``` -->
-
-
-<!-- ### Analyzing Data in Raw form given in diabetic.data.csv and from website -->
-
-<!-- ```{r} -->
-<!-- data_all <- read.csv("D:/courses_fall_2016/data mining stat571/mini project/diabetic.data.csv", header = TRUE) -->
-<!-- str(data_all) -->
-<!-- names(data_all) -->
-<!-- #is.na(data_all) -->
-<!-- ``` -->
-
-<!-- ### Analyzing data in filtered form given in readmission.csv -->
-
-<!-- ```{r} -->
-<!-- data <- read.csv("D:/courses_fall_2016/data mining stat571/mini project/readmission.csv", header = TRUE) -->
-
-<!-- str(data) -->
-<!-- names(data) -->
-<!-- sum(is.na(data)) -->
-<!-- sum(as.numeric(which(as.numeric(data$max_glu_serum)=="3"))) -->
-<!-- #we plot few variables against readmission indicator. Few variables like glucose serum test and A1c #test quantitatively gives patients seriousness for diabetes  -->
-<!-- # plot(data$max_glu_serum, data$A1Cresult,  -->
-<!-- #        pch  = 16,  -->
-<!-- #        cex  = 1.2, -->
-<!-- #        col  = "blue", -->
-<!-- #        xlab = "Glucose serum test",  -->
-<!-- #        ylab = "Readmission indicator", -->
-<!-- #        main = "Readmission indicator vs Glucose serum test") -->
-<!-- #Analyze readmission vs clinical test results -->
-<!-- hist(as.numeric(data$readmitted), breaks=10, col="blue") -->
-<!-- ggplot(data, aes(as.numeric(data$A1Cresult),fill=as.numeric(data$readmitted))) + -->
-<!-- geom_histogram(bins = 60) + -->
-<!-- xlab("Age (s)") + ylab("Count") + -->
-<!-- ggtitle("Distribution of Age") -->
-<!-- #Analyze readmission vs Race -->
-<!-- hist(as.numeric(data$race), breaks=10, col="blue") -->
-<!-- ggplot(data, aes(as.numeric(data$readmitted),fill=(data$race))) + -->
-<!-- geom_histogram(bins = 60) + -->
-<!-- xlab("Readmission") + ylab("Count") + -->
-<!-- ggtitle("Distribution of Race in readmission") -->
-<!-- # Analysis of readmission vs Gender -->
-<!-- ggplot(data, aes(as.numeric(data$readmitted),fill=(data$gender))) + -->
-<!-- geom_histogram(bins = 60) + -->
-<!-- xlab("Readmission") + ylab("Count") + -->
-<!-- ggtitle("Distribution of Gender in readmission") -->
-<!-- #Conclusion: Almost equal males and females for readmission -->
-<!-- #Analyze relation between readmission vs time spend in hospital -->
-<!-- plot(data$time_in_hospital,jitter(as.numeric(data$readmitted)),pch=4) -->
-<!-- #Conclusion-cant comment anything from result -->
+##5. readmitted vs change
+with(data_train, addmargins(prop.table(table(readmitted, change),2)))
+#this variable shows us whether there was change in any of the medication of patient. Conditional probability table shows us that there is no significant impact, but patients whose medication are changes have slightly higher probability of readmission.
 
-<!-- # we cannot analyze each and every factor this way, therefore we analyze the ones which #we feel are more intuitive and then move on with building our model -->
+##6. readmitted vs diabetesmed
+with(data_train, addmargins(prop.table(table(readmitted, diabetesMed),2)))
+#this variable shows that there is higher probability of readmission given that diabetes medication is given to patient. This is one of the main factor which raises doubts on the previous treatment of patient. Also we see that this factor shows considerable difference between percent of patients readmitted within 30 days and after 30 days.
 
-<!-- # person's medical history can be a key indicator of present analysis. -->
-<!-- # Therefore we try to relate those quantitities -->
+##7. readmitted vs disch_disp_modified
+with(data_train, addmargins(prop.table(table(readmitted, disch_disp_modified),2)))
+#There are four levels with this predictor:
+#1. discharged to home
+#2. discharged to home with home health service
+#3. discharged/transferred to Skilled Nursing Facility
+#4. other
 
-<!-- # Analyze readmission vs number_inpatient  -->
-<!-- hist(as.numeric(data$number_inpatient), breaks=10, col="blue") -->
-<!-- ggplot(data, aes(as.numeric(data$readmitted),fill=as.factor(data$number_inpatient))) + -->
-<!-- geom_histogram(bins = 60) + -->
-<!-- xlab("Readmission") + ylab("Count") + -->
-<!-- ggtitle("Distribution of number_inpatient in readmission") -->
-<!-- #Conclusion: No clear trend -->
+# from the table, we see that people discharged to home have less probability of readmission. Patients who are provided with home health service or those who are transfered to SNF are more vulnerable to readmission. This is quite intuitive as patients not cured completely are the ones who need extra care. And eventually they are the ones who have high probability of readmission.
 
-<!-- # Analyze readmission vs number_outpatient  -->
-<!-- hist(as.numeric(data$number_outpatient), breaks=10, col="blue") -->
-<!-- ggplot(data, aes(as.numeric(data$readmitted),fill=as.factor(data$number_outpatient))) + -->
-<!-- geom_histogram(bins = 60) + -->
-<!-- xlab("Readmission") + ylab("Count") + -->
-<!-- ggtitle("Distribution of number_outpatient in readmission") -->
-<!-- #Conclusion: No clear trend -->
+##8. readmitted vs adm_src_mod
+with(data_train, addmargins(prop.table(table(readmitted, adm_src_mod),2)))
+# from the table, we see that patients who are admitted to hospital on emergency basis or those who are transferred from home health serive have higher probability of readmission. Emergency case indicates that there is some severe malfunctioning with patient and it needs serious diagnosis. If this emergency is not well treated, then there is high probability of patient being readmitted. If the patient is transfered from home health service, then it is a sign of prolonged treatment, which in turn means that disease might be incurable and patient may be readmitted again. If the patient is admitted on the basis of physician referral, then it is quite possible that he is admitted for the first time and his disease is curable.
 
-<!-- # Analyze readmission vs number_emergency  -->
-<!-- hist(as.numeric(data$number_emergency), breaks=100, col="blue") -->
-<!-- ggplot(data, aes(as.numeric(data$number_emergency),fill=as.factor(data$readmitted))) + -->
-<!-- geom_histogram(bins = 60) + -->
-<!-- xlab("Readmission") + ylab("Count") + -->
-<!-- ggtitle("Distribution of number_emergency in readmission") -->
-<!-- #Conclusion: No clear trend -->
 
+##9. readmitted vs adm_typ_mod
+with(data_train, addmargins(prop.table(table(readmitted, adm_typ_mod),2)))
+#no significant conclusion
 
-<!-- ``` -->
+##10. readmitted vs age_mod
+with(data_train, addmargins(prop.table(table(readmitted, age_mod),2)))
+#From the table we see that majority of people who are readmitted are the ones who have age greater than 20.
 
-<!-- We analyze two clinical results and we find that both of them have major proportion of "None" values and therefore they are inapt to provide any substantial information for our case. -->
+##11. readmitted vs diag1_mod
+with(data_train, addmargins(prop.table(table(readmitted, diag1_mod),2)))
+#diag1_mod gives us the ICD9 codes for primary treatment for various diseases. From the conditional probability table we see that this turns out to be one of the significant factor which differes for various different levels. For example, patient with ICD9 code equal to 250.6 has 21.6% probability of readmission compared to patient with ICD9 code equal to 996 which has only 5.17% probability of readmission. Analyzing this variable further, we see that 250.6 code corresponds to diabetes with neurological manifestations. Clearly this shows that patients who have undergone primary treatment for diabetes with neurological manifestations are far more vulnerabel to readmission within 30 days compared to other patients. Few other patients who have high probability of readmission within 30 days are:
+# 1. Diabetes with other specifies manifestations
+# 2. Disorders with fluid, electrolyte and acid-base imbalance
+# 3. Septicaemia
+# 4. Acute myocardial infarction
+# 5. Other forms of chronic ischemic heart disease
+# 6. Cardiac dysrhythmias
 
+# Patients with least chances of readmission
+# 1. Transient cerebral ischemia(435)
+# 2. Asthma(493)
+# 3. Lung disease(518)
+# 4. Disorders of urethrea and urinary track(599)
+# 5. cellulitis and abscess(682)
+# 6. Dyspnea and respiratory abnormalities(786)
+# 7. Fracture of neck of femur(820)
+# 8. Complications of surgical and medical care(996)
 
 
-<!-- ### Model Selection -->
-<!-- Many ways to select model: -->
-<!-- 1. Forward selection -->
-<!-- 2. Backward selection -->
-<!-- 3. Regsubset(Exhaustive) -->
-<!-- 4. LASSO/Elastic net -->
-<!-- 5. Random Forests -->
-<!-- ```{r} -->
-<!-- #First we split that data into training and testing set. And we will not touch the #testing set except for the crossvalidation part -->
-<!-- data_train <- data -->
-<!-- # name.num <- sapply(data_train, is.numeric) # pulling out all the num. var's. -->
-<!-- # pairs(data_train[name.num]) # pariwise scatter plots for num var's -->
-<!-- # #above command will allow us to identify the correlation between any two numeric #variables  -->
-<!-- # cor(data.comp[name.num]) -->
-<!-- # pairs(data.comp[c("Salary","CHmRun", "Hits")], pch=16) #this command can be used to zoom in scatter plots for particular variables -->
+##12. readmitted vs diag2_mod
+with(data_train, addmargins(prop.table(table(readmitted, diag2_mod),2)))
+# we see that patient who has undergone secondary treatment of Other cellulitis and abscess(682), has very high probability of readmission within 30 days.
 
 
-<!-- #########VERY IMPORTANT: Is any transformation required on any of the variable?/###### -->
-<!-- ##Find answer to the above question -->
+##13. readmitted vs diag3_mod
+with(data_train, addmargins(prop.table(table(readmitted, diag3_mod),2)))
+# we see that patient who has undergone tertiary treatment for Alteration of consciousness(780), has very high probability of readmission within 30 days.
 
-<!-- ## RSS solely cannot be used as a criteria to build our model. Presently we have 30 predictors + one output. If we use RSS as our criteria to build model, then we will build a model with 30 predictors as shown below -->
 
-<!-- data_in_train <- data_train[, -31]   #variable "readmitted" removed from the predictor set -->
-<!-- data_out_train <- data_train[,31]  #output variable -->
+######VERY IMPORTANT CONCLUSION
+# From the three level of treatment undergone by a patient we see that that patient with diabetes who has undergone primary treatment is very much likely for readmission within 30 days but this probability goes down considerably after secondary and tertiary treatment.
 
-<!-- model_all_var <- lm(as.numeric(readmitted) ~ .,data=data_train) -->
-<!-- summary(model_all_var) -->
 
-<!-- ## From the above summary, comment on some important predictors. -->
-<!-- ## Simply removing higher p-value variables does not give us correcct accurate model. -->
+###effect of changes in various medications on readmission rate
+with(data_train, addmargins(prop.table(table(readmitted, metformin),2)))
+# when lowered, thre is high chance of readmission within 30 days
+with(data_train, addmargins(prop.table(table(readmitted, glimepiride),2)))
+# when lowered, there is chance of readmission within 30 days
+with(data_train, addmargins(prop.table(table(readmitted, glipizide),2)))
+# when raises, there is less chance of readmission within 30 days
+with(data_train, addmargins(prop.table(table(readmitted, glyburide),2)))
+# when raised, there is high chance of readmission within 30 days
+with(data_train, addmargins(prop.table(table(readmitted, pioglitazone),2)))
+# when lowered, thre is high chance of readmission within 30 days
+with(data_train, addmargins(prop.table(table(readmitted, rosiglitazone),2)))
+# when raised, there is high chance of readmission within 30 days
+with(data_train, addmargins(prop.table(table(readmitted, insulin),2)))
+# no significant change..WHY?
 
-<!-- ##Before going into model building, we need to efficiently deal with categorical variables. Work on this later. -->
 
+#########
+##now we deal with effect of numerical variables on readmission rate
+## 11. readmitted vs time_in_hospital
+ggplot(data_train, aes(data_train$time_in_hospital,fill=as.factor(data_train$readmitted))) +
+geom_histogram(bins = 60) +
+xlab("Readmission") + ylab("Count") +
+ggtitle("Distribution of number_emergency in readmission")
 
-<!-- #We will use following three parameters to judge the efficiency of model: -->
-<!-- #1. Cp- indirect measurement of mean prediction error -->
-<!-- #2. AIC- notion of likelihood function -->
-<!-- #3. BIC- derived from Bayesian route, this criteria helps in selecting smaller models -->
+with(data_train, addmargins(prop.table(table(readmitted, time_in_hospital),2)))
+#from the table it is clear that patients with more than one day of admit in hospitals are more likely to be readmitted within 30 days.
 
-<!-- ############REGSUBSETS########### -->
+with(data_train, addmargins(prop.table(table(readmitted, num_lab_procedures),2)))
+ggplot(data_train, aes(data_train$num_lab_procedures,fill=as.factor(data_train$readmitted))) +
+geom_histogram(bins = 60) +
+xlab("Readmission") + ylab("Count") +
+ggtitle("Distribution of number_emergency in readmission")
+cor(data_train$time_in_hospital,as.numeric(data_train$readmitted))
+cor(data_train$num_lab_procedures,as.numeric(data_train$readmitted))
+cor(data_train$num_procedures,as.numeric(data_train$readmitted))
+cor(data_train$num_medications,as.numeric(data_train$readmitted))
+cor(data_train$number_outpatient,as.numeric(data_train$readmitted))
+cor(data_train$number_inpatient,as.numeric(data_train$readmitted))
+cor(data_train$number_diagnoses,as.numeric(data_train$readmitted))
+# All the above correlation value shows us that all numeric variables are important in predicting readmission probability.
 
-<!-- ### Exhaustive search- this method will give best model(one with least RSS) for particular number of predictors -->
+#list of important predictorS:diabetesmed+diag1_mod+diag2_mod+diag3_mod+metformin+glimepiride+glipizide+glyburide+pioglitazone+rosiglitazone+time_in_hospital+num_lab_procedures+num_procedures+num_medications+number_outpatient+number_inpatient+number_diagnoses
 
-<!-- #fit.exh <- regsubsets(as.numeric(readmitted) ~., data=data_train, nvmax=31, method="exhaustive") -->
-<!-- # we see that exhaustive search method is extremely slow and it does throw and error -->
-<!-- # therefore we search for best model using forward and backward selection method -->
+```
 
-<!-- ### Forward selection  -->
-<!-- set.seed(123) -->
-<!-- fit.forward <- regsubsets(as.numeric(readmitted) ~., data=data_train, nvmax=100, method="forward") -->
-<!-- fit.forward -->
-<!-- f.f <- summary(fit.forward) -->
-<!-- f.f -->
+We run the random forest algorithm for all the predictors variable. But we find that only few predictors are important and then we chose those predictors, build our random forest and compare the confusion matrix of this forest with the previous one. At this point, we would like to comment on few predictors which seems to be important through our Random Forest model.
 
-<!-- # we use Cp, BIC and adjRsq criteria to find the optimum number of predictors -->
+## Random Forest
 
-<!-- f.f$which -->
-<!-- f.f$rsq -->
-<!-- f.f$rss -->
-<!-- f.f$bic -->
+```{r}
+# Mis-classification rates of OOB, misclassification errors for "0" and "1"
+set.seed(1)
+fit.rf <- randomForest(readmitted ~ ., data_train,mtry=4,ntree=40)
+plot(fit.rf)
+fit.rf.pred.y <- predict(fit.rf, data_test[,-c(31)])
+mean(data_test[,c(31)] != fit.rf.pred.y)
 
+# mean error is too high, therefore we filter important predictors
 
+importance(fit.rf)  # this function returns us all the important variables.
+varImpPlot(fit.rf,type=2)
 
-<!-- par(mfrow=c(3,1)) -->
-<!-- plot(f.f$adjr2 ,xlab =" Number of Variables ", -->
-<!--      ylab=" Adjusted RSq") -->
-<!-- points(which.max(f.f$adjr2), f.f$adjr2[which.max(f.f$adjr2)], col ="red",cex =2, pch =20) -->
+# we now build a model with these important predictors
 
-<!-- plot(f.f$cp ,xlab =" Number of Variables ",ylab="Cp") -->
-<!-- points (which.min(f.f$cp), f.f$cp[which.min(f.f$cp)], col ="red",cex =2, pch =20) -->
+set.seed(1)
+fit.rf_fin <- randomForest(readmitted ~ time_in_hospital + num_lab_procedures  + num_medications + num_procedures + number_inpatient + number_diagnoses + insulin + diag1_mod + diag2_mod + diag3_mod + disch_disp_modified + adm_src_mod + adm_typ_mod + age_mod, data_train, mtry=4, ntree=100)
+fit.rf.pred.y <- predict(fit.rf_fin, data=data_test)
+mean(data_test$readmitted != fit.rf.pred.y)
+plot(fit.rf_fin)
 
-<!-- plot(f.f$bic ,xlab=" Number of Variables ",ylab=" BIC") -->
-<!-- points (which.min(f.f$bic), f.f$bic[which.min(f.f$bic)], col =" red",cex =2, pch =20) -->
-<!-- par(mfrow=c(1,1)) -->
 
-<!-- ##we get optimum number of predictors=43; using min BIC value -->
+set.seed(1)
+fit.rf_fin <- randomForest(readmitted ~  diabetesMed+diag1_mod+diag2_mod+diag3_mod+metformin+glimepiride+glipizide+glyburide+pioglitazone+rosiglitazone+time_in_hospital+num_lab_procedures+num_procedures+num_medications+number_outpatient+number_inpatient+number_diagnoses, data_train, mtry=4, ntree=100)
+fit.rf.pred.y <- predict(fit.rf_fin, data=data_test)
+mean(data_test$readmitted != fit.rf.pred.y)
+plot(fit.rf_fin)
+```
 
-<!-- opt.size <- which.min(f.f$bic) # locate the optimal model size -->
-<!-- opt.size -->
-<!-- fit.exh.var <- f.f$which  -->
-<!-- fit.exh.var[opt.size,]  # this gives us the optimal variables selected -->
 
-<!-- ``` -->
+## LASSO
 
-<!-- ### Model selection using forward selection and for loop -->
+```{r}
+y <- data_train[, 31]
+X <- model.matrix(readmitted~., data=data_train)[, -1]
+set.seed(1)
+fit.lasso.cv <- cv.glmnet(X, y, alpha=.99, family="multinomial")
+plot(fit.lasso.cv)
+fit.lasso.1se <- glmnet(X, y, alpha=0.99, family="multinomial", lambda=fit.lasso.cv$lambda.1se)
+fit.lasso.1se.beta <- coef(fit.lasso.1se)
+beta <- fit.lasso.1se.beta[which(fit.lasso.1se.beta !=0),] # non zero beta's
+beta <- as.matrix(beta); beta
+rownames(beta)
+predict.lasso <- predict(fit.lasso.cv, as.matrix(data_test[, 31]), type = "class", s="lambda.1se")
 
-<!-- We see that due to presence of too many categorical variables, we cannot select the model directly using regsubset function. We use for loop to find our model. -->
+# cant use logistic regression because it is valid only for binary classification, one option is to use multinom() function
 
-<!-- ```{r} -->
-<!-- # temp_mod=0 -->
-<!-- # aic_val=0 -->
-<!-- # for (i in 1:30){ -->
-<!-- #   temp_mod <- lm(as.numeric(readmitted) ~ data_train[,i], data=data_train) -->
-<!-- #   aic_val[i]=AIC(temp_mod) -->
-<!-- # } -->
-<!-- # lm_input=0 -->
-<!-- # for (i in 1:10){ -->
-<!-- #   which.min(aic_val) -->
-<!-- #   lm_input <- cbind(lm_input,data_train[,which.min(aic_val)]) -->
-<!-- #   aic_val[which.min(aic_val)] <- 0 -->
-<!-- # } -->
-<!-- ``` -->
+#but we stick to decision trees and random forest to evaluate our final performance
 
-<!-- ## Data Analysis -->
+#from lasso, we get following predictors as important ones
+# (readmitted ~  diabetesMed+diag1_mod+diag2_mod+diag3_mod+num_medications+number_outpatient+number_inpatient+number_diagnoses+number_emergency+disch_disp_modified+adm_src_mod, data_train, mtry=4, ntree=100)
 
-<!-- Complete data set given to us in file "diabetic.data.csv" has many redundant variables. Therefore we work with filtered dataset provided in file "readmission.csv" which contains only 31 variables. It has almost around 100000 data samples of different patients. We cannot work this large dataset because of the computational limit. The maximum number of trees formed in random forest is directly limited by the samples we take in training our model. More the samples, less number of trees can be formed owing to computational limit. -->
+# we use these predictors to fit a random forest model
+set.seed(1)
+fit.rf_fin <- randomForest(readmitted ~  diabetesMed+diag1_mod+diag2_mod+diag3_mod+num_medications+number_outpatient+number_inpatient+number_diagnoses+number_emergency+disch_disp_modified+adm_src_mod, data_train, mtry=4, ntree=100)
+fit.rf.pred.y <- predict(fit.rf_fin, data=data_test)
+mean(data_test$readmitted != fit.rf.pred.y)
+plot(fit.rf_fin)
 
 
-<!-- ```{r} -->
-<!-- set.seed(1) -->
-<!-- data_t <- data[sample(nrow(data), 50000, replace=FALSE), ] -->
-<!-- n=nrow(data) -->
-<!-- test.index=sample(n, 40000) -->
-<!-- length(test.index) -->
-<!-- data_test=data[test.index,]  -->
-<!-- data_train=data[-test.index,]  -->
+##random forest does not give good accuracy, therefore we try to fit a single decision tree
+set.seed(1)
+fit.tree <- tree(readmitted ~  diabetesMed+diag1_mod+diag2_mod+diag3_mod+num_medications+number_outpatient+number_inpatient+number_diagnoses+number_emergency+disch_disp_modified+adm_src_mod, data_train)
+fit.tree.pred.y <- predict(fit.tree,data=data_test)
+mean(data_test$readmitted != fit.tree.pred.y)
 
 
-<!-- ## Cool plot for showing correlation between different predictors -->
-<!-- M <- cor(data_train[sapply(data_train, is.numeric)]) -->
-<!-- corrplot(M, method="circle") -->
-<!-- plot(data_train$gender,data_train$time_in_hospital) -->
-<!-- # compared to male, female spends more time in hospital -->
-<!-- plot(data_train$readmitted,data_train$time_in_hospital) -->
-<!-- # on average, readmitted people tend to spend more time in hospital compared to other  -->
-<!-- # categories -->
+```
 
+## Forward selection method
 
-
-<!-- ############################################################################## -->
-<!-- #to exploit the relation between two categorical variables, we create two way tables for  -->
-<!-- #various variables. -->
-
-<!-- ## 1. readmitted vs gender -->
-
-<!-- with(data_train, table(readmitted, gender)) -->
-
-<!-- #from the table we see that, proportion of males and females being readmitted are almost same and thus gender does not give us any significant information -->
-
-<!-- ## 2. readmitted vs race -->
-
-<!-- with(data_train, table(readmitted, race)) -->
-<!-- #from the table we see that race is one of the important factor. AfricanAmerican, Caucasian, Hispanic have higher proportion of readmissions. -->
-
-<!-- ##3. readmitted vs max_glu_serum -->
-
-<!-- with(data_train, prop.table(table(readmitted, max_glu_serum),2)) -->
-<!-- with(data_train, addmargins(prop.table(table(readmitted, max_glu_serum),2))) -->
-
-<!-- #glucose serum test gives us the sugar level of patient. This is one of the predictor which directly correlates with the severeness of disease. It can be seen from proportion table, that case with >200 and >300 serum levels have high probability of readmission compared to other cases. -->
-
-<!-- ##4. readmitted vs A1Cresult -->
-<!-- with(data_train, addmargins(prop.table(table(readmitted, A1Cresult),2))) -->
-<!-- # A1Ctest gives us the average glucose level in a person's body for past 3 months. Clearly this test would be a significant factor in determining readmission rate. But the results from conditional probability tables are counter intuitive. WHY? -->
-
-<!-- ##5. readmitted vs change -->
-<!-- with(data_train, addmargins(prop.table(table(readmitted, change),2))) -->
-<!-- #this variable shows us whether there was change in any of the medication of patient. Conditional probability table shows us that there is no significant impact, but patients whose medication are changes have slightly higher probability of readmission. -->
-
-<!-- ##6. readmitted vs diabetesmed -->
-<!-- with(data_train, addmargins(prop.table(table(readmitted, diabetesMed),2))) -->
-<!-- #this variable shows that there is higher probability of readmission given that diabetes medication is given to patient. This is one of the main factor which raises doubts on the previous treatment of patient. Also we see that this factor shows considerable difference between percent of patients readmitted within 30 days and after 30 days. -->
-
-<!-- ##7. readmitted vs disch_disp_modified -->
-<!-- with(data_train, addmargins(prop.table(table(readmitted, disch_disp_modified),2))) -->
-<!-- #There are four levels with this predictor: -->
-<!-- #1. discharged to home -->
-<!-- #2. discharged to home with home health service -->
-<!-- #3. discharged/transferred to Skilled Nursing Facility -->
-<!-- #4. other -->
-
-<!-- # from the table, we see that people discharged to home have less probability of readmission. Patients who are provided with home health service or those who are transfered to SNF are more vulnerable to readmission. This is quite intuitive as patients not cured completely are the ones who need extra care. And eventually they are the ones who have high probability of readmission. -->
-
-<!-- ##8. readmitted vs adm_src_mod -->
-<!-- with(data_train, addmargins(prop.table(table(readmitted, adm_src_mod),2))) -->
-<!-- # from the table, we see that patients who are admitted to hospital on emergency basis or those who are transferred from home health serive have higher probability of readmission. Emergency case indicates that there is some severe malfunctioning with patient and it needs serious diagnosis. If this emergency is not well treated, then there is high probability of patient being readmitted. If the patient is transfered from home health service, then it is a sign of prolonged treatment, which in turn means that disease might be incurable and patient may be readmitted again. If the patient is admitted on the basis of physician referral, then it is quite possible that he is admitted for the first time and his disease is curable. -->
-
-
-<!-- ##9. readmitted vs adm_typ_mod -->
-<!-- with(data_train, addmargins(prop.table(table(readmitted, adm_typ_mod),2))) -->
-<!-- #no significant conclusion -->
-
-<!-- ##10. readmitted vs age_mod -->
-<!-- with(data_train, addmargins(prop.table(table(readmitted, age_mod),2))) -->
-<!-- #From the table we see that majority of people who are readmitted are the ones who have age greater than 20. -->
-
-<!-- ##11. readmitted vs diag1_mod -->
-<!-- with(data_train, addmargins(prop.table(table(readmitted, diag1_mod),2))) -->
-<!-- #diag1_mod gives us the ICD9 codes for primary treatment for various diseases. From the conditional probability table we see that this turns out to be one of the significant factor which differes for various different levels. For example, patient with ICD9 code equal to 250.6 has 21.6% probability of readmission compared to patient with ICD9 code equal to 996 which has only 5.17% probability of readmission. Analyzing this variable further, we see that 250.6 code corresponds to diabetes with neurological manifestations. Clearly this shows that patients who have undergone primary treatment for diabetes with neurological manifestations are far more vulnerabel to readmission within 30 days compared to other patients. Few other patients who have high probability of readmission within 30 days are: -->
-<!-- # 1. Diabetes with other specifies manifestations -->
-<!-- # 2. Disorders with fluid, electrolyte and acid-base imbalance -->
-<!-- # 3. Septicaemia -->
-<!-- # 4. Acute myocardial infarction -->
-<!-- # 5. Other forms of chronic ischemic heart disease -->
-<!-- # 6. Cardiac dysrhythmias -->
-
-<!-- # Patients with least chances of readmission -->
-<!-- # 1. Transient cerebral ischemia(435) -->
-<!-- # 2. Asthma(493) -->
-<!-- # 3. Lung disease(518) -->
-<!-- # 4. Disorders of urethrea and urinary track(599) -->
-<!-- # 5. cellulitis and abscess(682) -->
-<!-- # 6. Dyspnea and respiratory abnormalities(786) -->
-<!-- # 7. Fracture of neck of femur(820) -->
-<!-- # 8. Complications of surgical and medical care(996) -->
-
-
-<!-- ##12. readmitted vs diag2_mod -->
-<!-- with(data_train, addmargins(prop.table(table(readmitted, diag2_mod),2))) -->
-<!-- # we see that patient who has undergone secondary treatment of Other cellulitis and abscess(682), has very high probability of readmission within 30 days. -->
-
-
-<!-- ##13. readmitted vs diag3_mod -->
-<!-- with(data_train, addmargins(prop.table(table(readmitted, diag3_mod),2))) -->
-<!-- # we see that patient who has undergone tertiary treatment for Alteration of consciousness(780), has very high probability of readmission within 30 days. -->
-
-
-<!-- ######VERY IMPORTANT CONCLUSION -->
-<!-- # From the three level of treatment undergone by a patient we see that that patient with diabetes who has undergone primary treatment is very much likely for readmission within 30 days but this probability goes down considerably after secondary and tertiary treatment. -->
-
-
-<!-- ###effect of changes in various medications on readmission rate  -->
-<!-- with(data_train, addmargins(prop.table(table(readmitted, metformin),2))) -->
-<!-- # when lowered, thre is high chance of readmission within 30 days -->
-<!-- with(data_train, addmargins(prop.table(table(readmitted, glimepiride),2))) -->
-<!-- # when lowered, there is chance of readmission within 30 days -->
-<!-- with(data_train, addmargins(prop.table(table(readmitted, glipizide),2))) -->
-<!-- # when raises, there is less chance of readmission within 30 days -->
-<!-- with(data_train, addmargins(prop.table(table(readmitted, glyburide),2))) -->
-<!-- # when raised, there is high chance of readmission within 30 days -->
-<!-- with(data_train, addmargins(prop.table(table(readmitted, pioglitazone),2))) -->
-<!-- # when lowered, thre is high chance of readmission within 30 days  -->
-<!-- with(data_train, addmargins(prop.table(table(readmitted, rosiglitazone),2))) -->
-<!-- # when raised, there is high chance of readmission within 30 days -->
-<!-- with(data_train, addmargins(prop.table(table(readmitted, insulin),2))) -->
-<!-- # no significant change..WHY? -->
-
-
-<!-- ######### -->
-<!-- ##now we deal with effect of numerical variables on readmission rate -->
-<!-- ## 11. readmitted vs time_in_hospital -->
-<!-- ggplot(data_train, aes(data_train$time_in_hospital,fill=as.factor(data_train$readmitted))) + -->
-<!-- geom_histogram(bins = 60) + -->
-<!-- xlab("Readmission") + ylab("Count") + -->
-<!-- ggtitle("Distribution of number_emergency in readmission") -->
-
-<!-- with(data_train, addmargins(prop.table(table(readmitted, time_in_hospital),2))) -->
-<!-- #from the table it is clear that patients with more than one day of admit in hospitals are more likely to be readmitted within 30 days. -->
-
-<!-- with(data_train, addmargins(prop.table(table(readmitted, num_lab_procedures),2))) -->
-<!-- ggplot(data_train, aes(data_train$num_lab_procedures,fill=as.factor(data_train$readmitted))) + -->
-<!-- geom_histogram(bins = 60) + -->
-<!-- xlab("Readmission") + ylab("Count") + -->
-<!-- ggtitle("Distribution of number_emergency in readmission") -->
-<!-- cor(data_train$time_in_hospital,as.numeric(data_train$readmitted)) -->
-<!-- cor(data_train$num_lab_procedures,as.numeric(data_train$readmitted)) -->
-<!-- cor(data_train$num_procedures,as.numeric(data_train$readmitted)) -->
-<!-- cor(data_train$num_medications,as.numeric(data_train$readmitted)) -->
-<!-- cor(data_train$number_outpatient,as.numeric(data_train$readmitted)) -->
-<!-- cor(data_train$number_inpatient,as.numeric(data_train$readmitted)) -->
-<!-- cor(data_train$number_diagnoses,as.numeric(data_train$readmitted)) -->
-<!-- # All the above correlation value shows us that all numeric variables are important in predicting readmission probability. -->
-
-<!-- #list of important predictorS:diabetesmed+diag1_mod+diag2_mod+diag3_mod+metformin+glimepiride+glipizide+glyburide+pioglitazone+rosiglitazone+time_in_hospital+num_lab_procedures+num_procedures+num_medications+number_outpatient+number_inpatient+number_diagnoses -->
-
-<!-- ``` -->
-
-<!-- We run the random forest algorithm for all the predictors variable. But we find that only few predictors are important and then we chose those predictors, build our random forest and compare the confusion matrix of this forest with the previous one. At this point, we would like to comment on few predictors which seems to be important through our Random Forest model. -->
-
-<!-- ## Random Forest -->
-
-<!-- ```{r} -->
-<!-- # Mis-classification rates of OOB, misclassification errors for "0" and "1" -->
-<!-- set.seed(1) -->
-<!-- fit.rf <- randomForest(readmitted ~ ., data_train,mtry=4,ntree=40) -->
-<!-- plot(fit.rf) -->
-<!-- fit.rf.pred.y <- predict(fit.rf, data_test[,-c(31)]) -->
-<!-- mean(data_test[,c(31)] != fit.rf.pred.y) -->
-
-<!-- # mean error is too high, therefore we filter important predictors -->
-
-<!-- importance(fit.rf)  # this function returns us all the important variables.  -->
-<!-- varImpPlot(fit.rf,type=2) -->
-
-<!-- # we now build a model with these important predictors -->
-
-<!-- set.seed(1) -->
-<!-- fit.rf_fin <- randomForest(readmitted ~ time_in_hospital + num_lab_procedures  + num_medications + num_procedures + number_inpatient + number_diagnoses + insulin + diag1_mod + diag2_mod + diag3_mod + disch_disp_modified + adm_src_mod + adm_typ_mod + age_mod, data_train, mtry=4, ntree=100) -->
-<!-- fit.rf.pred.y <- predict(fit.rf_fin, data=data_test) -->
-<!-- mean(data_test$readmitted != fit.rf.pred.y) -->
-<!-- plot(fit.rf_fin) -->
-
-
-<!-- set.seed(1) -->
-<!-- fit.rf_fin <- randomForest(readmitted ~  diabetesMed+diag1_mod+diag2_mod+diag3_mod+metformin+glimepiride+glipizide+glyburide+pioglitazone+rosiglitazone+time_in_hospital+num_lab_procedures+num_procedures+num_medications+number_outpatient+number_inpatient+number_diagnoses, data_train, mtry=4, ntree=100) -->
-<!-- fit.rf.pred.y <- predict(fit.rf_fin, data=data_test) -->
-<!-- mean(data_test$readmitted != fit.rf.pred.y) -->
-<!-- plot(fit.rf_fin) -->
-<!-- ``` -->
-
-
-<!-- ## LASSO -->
-
-<!-- ```{r} -->
-<!-- y <- data_train[, 31] -->
-<!-- X <- model.matrix(readmitted~., data=data_train)[, -1] -->
-<!-- set.seed(1) -->
-<!-- fit.lasso.cv <- cv.glmnet(X, y, alpha=.99, family="multinomial")   -->
-<!-- plot(fit.lasso.cv) -->
-<!-- fit.lasso.1se <- glmnet(X, y, alpha=0.99, family="multinomial", lambda=fit.lasso.cv$lambda.1se) -->
-<!-- fit.lasso.1se.beta <- coef(fit.lasso.1se) -->
-<!-- beta <- fit.lasso.1se.beta[which(fit.lasso.1se.beta !=0),] # non zero beta's -->
-<!-- beta <- as.matrix(beta); beta -->
-<!-- rownames(beta) -->
-<!-- predict.lasso <- predict(fit.lasso.cv, as.matrix(data_test[, 31]), type = "class", s="lambda.1se") -->
-
-<!-- # cant use logistic regression because it is valid only for binary classification, one option is to use multinom() function -->
-
-<!-- #but we stick to decision trees and random forest to evaluate our final performance -->
-
-<!-- #from lasso, we get following predictors as important ones -->
-<!-- # (readmitted ~  diabetesMed+diag1_mod+diag2_mod+diag3_mod+num_medications+number_outpatient+number_inpatient+number_diagnoses+number_emergency+disch_disp_modified+adm_src_mod, data_train, mtry=4, ntree=100) -->
-
-<!-- # we use these predictors to fit a random forest model -->
-<!-- set.seed(1) -->
-<!-- fit.rf_fin <- randomForest(readmitted ~  diabetesMed+diag1_mod+diag2_mod+diag3_mod+num_medications+number_outpatient+number_inpatient+number_diagnoses+number_emergency+disch_disp_modified+adm_src_mod, data_train, mtry=4, ntree=100) -->
-<!-- fit.rf.pred.y <- predict(fit.rf_fin, data=data_test) -->
-<!-- mean(data_test$readmitted != fit.rf.pred.y) -->
-<!-- plot(fit.rf_fin) -->
-
-
-<!-- ##random forest does not give good accuracy, therefore we try to fit a single decision tree -->
-<!-- set.seed(1) -->
-<!-- fit.tree <- tree(readmitted ~  diabetesMed+diag1_mod+diag2_mod+diag3_mod+num_medications+number_outpatient+number_inpatient+number_diagnoses+number_emergency+disch_disp_modified+adm_src_mod, data_train) -->
-<!-- fit.tree.pred.y <- predict(fit.tree,data=data_test) -->
-<!-- mean(data_test$readmitted != fit.tree.pred.y) -->
-
-
-<!-- ``` -->
-
-<!-- ## Forward selection method -->
-
-<!-- ```{r} -->
-<!-- mydata$out <- relevel() -->
-<!-- ``` -->
+```{r}
+mydata$out <- relevel()
+```
